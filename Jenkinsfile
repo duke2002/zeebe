@@ -3,6 +3,14 @@
 @Library(["camunda-ci", "zeebe-jenkins-shared-library"]) _
 
 def buildName = "${env.JOB_BASE_NAME.replaceAll("%2F", "-").replaceAll("\\.", "-").take(20)}-${env.BUILD_ID}"
+def integrationTest = [
+    label: "zeebe-ci-build_${buildName}_it",
+    podSpec: '.ci/podSpecs/integration-test.yml',
+]
+def updateTest = [
+    label: "zeebe-ci-build_${buildName}_update",
+    podSpec: '.ci/podSpecs/update-test.yml',
+]
 
 def masterBranchName = 'master'
 def isMasterBranch = env.BRANCH_NAME == masterBranchName
@@ -22,7 +30,10 @@ pipeline {
             cloud 'zeebe-ci'
             label "zeebe-ci-build_${buildName}"
             defaultContainer 'jnlp'
-            yamlFile '.ci/podSpecs/distribution.yml'
+            yamlFile ".ci/podSpecs/distribution.yml"
+            // allows the pod to remain active for reuse until the configured number of minutes
+            // has passed since the last step was executed on it.
+            idleMinutes 15
         }
     }
 
@@ -43,15 +54,54 @@ pipeline {
 
     stages {
         stage('Prepare') {
-            steps {
-                setHumanReadableBuildDisplayName()
+            parallel {
+                stage('Distribution') {
+                    steps {
+                        setHumanReadableBuildDisplayName()
 
-                prepareMavenContainer()
-                prepareMavenContainer('jdk8')
-                container('golang') {
-                    sh '.ci/scripts/distribution/prepare-go.sh'
+                        prepareMavenContainer()
+                        prepareMavenContainer('jdk8')
+                        container('golang') {
+                            sh '.ci/scripts/distribution/prepare-go.sh'
+                        }
+                    }
                 }
 
+                stage('Integration Test') {
+                    agent {
+                        kubernetes {
+                            cloud 'zeebe-ci'
+                            label integrationTest.label
+                            defaultContainer 'jnlp'
+                            yamlFile integrationTest.podSpec
+                            // allows the pod to remain active for reuse until the configured number of minutes
+                            // has passed since the last step was executed on it.
+                            idleMinutes 15
+                        }
+                    }
+
+                    steps {
+                        prepareMavenContainer()
+                    }
+                }
+
+                stage('Update Test') {
+                    agent {
+                        kubernetes {
+                            cloud 'zeebe-ci'
+                            label updateTest.label
+                            defaultContainer 'jnlp'
+                            yamlFile updateTest.podSpec
+                            // allows the pod to remain active for reuse until the configured number of minutes
+                            // has passed since the last step was executed on it.
+                            idleMinutes 15
+                        }
+                    }
+
+                    steps {
+                        prepareMavenContainer()
+                    }
+                }
             }
         }
 
@@ -69,21 +119,75 @@ pipeline {
             }
         }
 
-        stage('Prepare Tests') {
-            environment {
-                IMAGE = "camunda/zeebe"
-                VERSION = readMavenPom(file: 'parent/pom.xml').getVersion()
-                TAG = 'current-test'
-            }
+        stage('Build Docker Images') {
+            parallel {
+                stage('Distribution') {
+                    environment {
+                        IMAGE = "camunda/zeebe"
+                        TAG = 'current-test'
+                    }
 
-            steps {
-                container('docker') {
-                    sh '.ci/scripts/docker/build.sh'
-                    sh '.ci/scripts/docker/build_zeebe-hazelcast-exporter.sh'
+                    steps {
+                        container('docker') {
+                            sh '.ci/scripts/docker/build.sh'
+                            sh '.ci/scripts/docker/build_zeebe-hazelcast-exporter.sh'
+                        }
+                    }
+                }
+
+                stage('Integration Test') {
+                    agent {
+                        kubernetes {
+                            cloud 'zeebe-ci'
+                            label integrationTest.label
+                            defaultContainer 'jnlp'
+                            yamlFile integrationTest.podSpec
+                            // allows the pod to remain active for reuse until the configured number of minutes
+                            // has passed since the last step was executed on it.
+                            idleMinutes 15
+                        }
+                    }
+
+                    environment {
+                        IMAGE = "camunda/zeebe"
+                        TAG = 'current-test'
+                    }
+
+                    steps {
+                        unstash name: "zeebe-distro"
+                        container('docker') {
+                            sh '.ci/scripts/docker/build.sh'
+                        }
+                    }
+                }
+
+                stage('Update Test') {
+                    agent {
+                        kubernetes {
+                            cloud 'zeebe-ci'
+                            label updateTest.label
+                            defaultContainer 'jnlp'
+                            yamlFile updateTest.podSpec
+                            // allows the pod to remain active for reuse until the configured number of minutes
+                            // has passed since the last step was executed on it.
+                            idleMinutes 15
+                        }
+                    }
+
+                    environment {
+                        IMAGE = "camunda/zeebe"
+                        TAG = 'current-test'
+                    }
+
+                    steps {
+                        unstash name: "zeebe-distro"
+                        container('docker') {
+                            sh '.ci/scripts/docker/build.sh'
+                        }
+                    }
                 }
             }
         }
-
 
         stage('Test') {
             parallel {
@@ -103,12 +207,12 @@ pipeline {
                             junit testResults: "**/*/TEST-go.xml", keepLongStdio: true
                         }
                     }
-               }
+                }
 
-               stage('Analyse (Java)') {
-                      steps {
-                          runMavenContainerCommand('.ci/scripts/distribution/analyse-java.sh')
-                      }
+                stage('Analyse (Java)') {
+                    steps {
+                        runMavenContainerCommand('.ci/scripts/distribution/analyse-java.sh')
+                    }
                 }
 
                 stage('Unit (Java)') {
@@ -126,6 +230,7 @@ pipeline {
                         }
                     }
                 }
+
                 stage('Unit 8 (Java 8)') {
                     environment {
                         SUREFIRE_REPORT_NAME_SUFFIX = 'java8-testrun'
@@ -142,31 +247,55 @@ pipeline {
                     }
                 }
 
-                stage('IT (Java)') {
+                stage('Integration Test') {
                     agent {
                         kubernetes {
                             cloud 'zeebe-ci'
-                            label "zeebe-ci-build_${buildName}_it"
+                            label integrationTest.label
                             defaultContainer 'jnlp'
-                            yamlFile '.ci/podSpecs/distribution.yml'
+                            yamlFile integrationTest.podSpec
+                            // allows the pod to remain active for reuse until the configured number of minutes
+                            // has passed since the last step was executed on it.
+                            idleMinutes 15
                         }
                     }
 
                     environment {
                         SUREFIRE_REPORT_NAME_SUFFIX = 'it-testrun'
-                        IMAGE = "camunda/zeebe"
-                        VERSION = readMavenPom(file: 'parent/pom.xml').getVersion()
-                        TAG = 'current-test'
                     }
 
                     steps {
-                        prepareMavenContainer()
                         unstash name: "zeebe-build"
-                        unstash name: "zeebe-distro"
-                        container('docker') {
-                            sh '.ci/scripts/docker/build.sh'
-                        }
                         runMavenContainerCommand('.ci/scripts/distribution/it-java.sh')
+                    }
+
+                    post {
+                        always {
+                            junit testResults: "**/*/TEST*${SUREFIRE_REPORT_NAME_SUFFIX}*.xml", keepLongStdio: true
+                        }
+                    }
+                }
+
+                stage('Update Test') {
+                    agent {
+                        kubernetes {
+                            cloud 'zeebe-ci'
+                            label updateTest.label
+                            defaultContainer 'jnlp'
+                            yamlFile updateTest.podSpec
+                            // allows the pod to remain active for reuse until the configured number of minutes
+                            // has passed since the last step was executed on it.
+                            idleMinutes 15
+                        }
+                    }
+
+                    environment {
+                        SUREFIRE_REPORT_NAME_SUFFIX = 'update-testrun'
+                    }
+
+                    steps {
+                        unstash name: "zeebe-build"
+                        runMavenContainerCommand('.ci/scripts/distribution/test-update-java.sh')
                     }
 
                     post {
@@ -192,13 +321,13 @@ pipeline {
             post {
                 always {
                     jacoco(
-                            execPattern: '**/*.exec',
-                            classPattern: '**/target/classes',
-                            sourcePattern: '**/src/main/java,**/generated-sources/protobuf/java,**/generated-sources/assertj-assertions,**/generated-sources/sbe',
-                            exclusionPattern: '**/io/zeebe/gateway/protocol/**,'
-                                    + '**/*Encoder.class,**/*Decoder.class,**/MetaAttribute.class,'
-                                    + '**/io/zeebe/protocol/record/**/*Assert.class,**/io/zeebe/protocol/record/Assertions.class,', // classes from generated resources
-                            runAlways: true
+                        execPattern: '**/*.exec',
+                        classPattern: '**/target/classes',
+                        sourcePattern: '**/src/main/java,**/generated-sources/protobuf/java,**/generated-sources/assertj-assertions,**/generated-sources/sbe',
+                        exclusionPattern: '**/io/zeebe/gateway/protocol/**,'
+                            + '**/*Encoder.class,**/*Decoder.class,**/MetaAttribute.class,'
+                            + '**/io/zeebe/protocol/record/**/*Assert.class,**/io/zeebe/protocol/record/Assertions.class,', // classes from generated resources
+                        runAlways: true
                     )
                     zip zipFile: 'test-coverage-reports.zip', archive: true, glob: "**/target/site/jacoco/**"
                 }
@@ -238,10 +367,10 @@ pipeline {
                     steps {
                         retry(3) {
                             build job: 'zeebe-docker', parameters: [
-                                    string(name: 'BRANCH', value: env.BRANCH_NAME),
-                                    string(name: 'VERSION', value: env.VERSION),
-                                    booleanParam(name: 'IS_LATEST', value: isMasterBranch),
-                                    booleanParam(name: 'PUSH', value: isDevelopBranch)
+                                string(name: 'BRANCH', value: env.BRANCH_NAME),
+                                string(name: 'VERSION', value: env.VERSION),
+                                booleanParam(name: 'IS_LATEST', value: isMasterBranch),
+                                booleanParam(name: 'PUSH', value: isDevelopBranch)
                             ]
                         }
                     }
@@ -273,7 +402,6 @@ pipeline {
                 if (env.BRANCH_NAME != 'develop' || agentDisconnected()) {
                     return
                 }
-
                 sendZeebeSlackMessage()
             }
         }
@@ -298,7 +426,7 @@ pipeline {
 //////////////////// Helper functions ////////////////////
 
 def getMavenContainerNameForJDK(String jdk = null) {
-    "maven${jdk ? '-'+jdk : ''}"
+    "maven${jdk ? '-' + jdk : ''}"
 }
 
 def prepareMavenContainer(String jdk = null) {
