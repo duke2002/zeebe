@@ -46,7 +46,6 @@ public class ContainerState implements CloseableResource {
             });
   }
 
-
   private ZeebeContainer broker;
   private ZeebeGatewayContainer gateway;
   private ZeebeClient client;

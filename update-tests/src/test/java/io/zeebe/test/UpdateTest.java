@@ -23,10 +23,13 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ArgumentsSource;
 import org.testcontainers.containers.Network;
 
+@Execution(ExecutionMode.CONCURRENT)
 @ExtendWith(ContainerStateExtension.class)
 class UpdateTest {
   private static final String LAST_VERSION = VersionUtil.getPreviousVersion();

@@ -1,4 +1,6 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
   <modelVersion>4.0.0</modelVersion>
   <name>Zeebe Update Tests</name>
@@ -115,6 +117,17 @@
       </activation>
       <properties>
         <maven.test.skip>true</maven.test.skip>
+      </properties>
+    </profile>
+    <!-- increase parallelization in CI based on the available dind sibling -->
+    <profile>
+      <id>ci</id>
+      <properties>
+        <junit.jupiter.execution.parallel.enabled>true</junit.jupiter.execution.parallel.enabled>
+        <junit.jupiter.execution.parallel.config.strategy>fixed
+        </junit.jupiter.execution.parallel.config.strategy>
+        <junit.jupiter.execution.parallel.config.fixed.parallelism>4
+        </junit.jupiter.execution.parallel.config.fixed.parallelism>
       </properties>
     </profile>
   </profiles>
